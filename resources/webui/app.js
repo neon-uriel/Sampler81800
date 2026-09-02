@@ -311,11 +311,6 @@ import ("./juce-index.js").then ((juce) => {
            isReaper && ! reaperAvailable && elastiqueLoaded);
     // フォールバック先はキャッシュ経路（REAPER Shifter かつ Natural / Manual）でだけ意味を持つ
     dimEl (document.getElementById ("sel-cacheFallback"), isReaper && dur !== 1);
-    const fbName = document.getElementById ("key-legend-fb");
-    if (fbName && C.cacheFallback) {
-      const names = C.cacheFallback.properties.choices || [];
-      fbName.textContent = names[C.cacheFallback.getChoiceIndex()] || "Varispeed";
-    }
 
     // REAPER Shifter は Sync 非対応 → Duration の "Sync" を選べなくする。選択中なら Natural へ。
     const selDur = document.getElementById ("sel-durationMode");
