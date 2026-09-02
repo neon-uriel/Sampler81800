@@ -461,13 +461,14 @@ void OtoMadSamplerWebEditor::nfFlattenState (const juce::Array<juce::var>&,
 }
 
 // JS: ready() — ページの初期化が終わった合図。
-// status は「変わったときだけ」送るが、エディタを開いた直後の 1 回目はページの JS が
+// status / keys は「変わったときだけ」送るが、エディタを開いた直後の 1 回目はページの JS が
 // まだ無くて捨てられる（送った記録だけ残る）。以後何も変わらないと二度と届かず、開き直した
 // エディタで elastique 判定や Shifter 欄の文言が初期値のまま止まる。ここで送信済み記録を捨てて再送させる。
 void OtoMadSamplerWebEditor::nfReady (const juce::Array<juce::var>&,
                                       juce::WebBrowserComponent::NativeFunctionCompletion complete)
 {
     lastStatusJson.clear(); lastShifterText.clear(); lastCacheDebug.clear();
+    lastKeyState.clear();   lastKeyHeld.clear();
     lastProgPct = -1; lastReaperKey = -1; lastCacheCount = -1;
     complete (true);
 }

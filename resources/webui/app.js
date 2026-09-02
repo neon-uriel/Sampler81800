@@ -1249,7 +1249,7 @@ import ("./juce-index.js").then ((juce) => {
   refreshFlatten();
   layoutCanvases();
   statusEl.textContent = "ready";
-  nfReady();   // イベント購読が揃ったので status を送り直してもらう
+  nfReady();   // イベント購読が揃ったので status / keys を送り直してもらう
 }).catch (e => showError (String (e && e.message ? e.message : e)));
 
 //================================================================ canvas sizing
