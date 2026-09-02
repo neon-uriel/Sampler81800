@@ -113,6 +113,62 @@ void ElastiqueDirect::unload()
 }
 
 //==============================================================================
+// 固有遅延を実測する。無音 → バースト を流し、出力側で立ち上がりが何サンプル遅れるかを見る。
+// 素材に依存しないよう、判定用の信号はここで作る（呼び出し側の素材は使わない）。
+int ElastiqueDirect::latencySamples (int numChannels, double sampleRate, Mode mode) const
+{
+    const int numCh = std::clamp (numChannels, 1, 2);
+    const int srKey = (int) std::lround (sampleRate);
+    const auto key = std::make_tuple ((int) mode, srKey, numCh);
+
+    {
+        std::lock_guard<std::mutex> lk (renderLock);
+        const auto it = latencyCache.find (key);
+        if (it != latencyCache.end())
+            return it->second;
+    }
+
+    // 無音 0.1秒 → 220Hz バースト 0.2秒
+    const std::int64_t sil = (std::int64_t) (sampleRate * 0.1);
+    const std::int64_t n   = sil + (std::int64_t) (sampleRate * 0.2);
+    SampleBuffer probe;
+    probe.numChannels = numCh;
+    probe.sampleRate  = sampleRate;
+    probe.numSamples  = n;
+    probe.data.assign ((std::size_t) numCh, std::vector<float> ((std::size_t) n, 0.0f));
+    for (std::int64_t i = sil; i < n; ++i)
+    {
+        const double t = (double) (i - sil) / sampleRate;
+        const float v = (float) (0.5 * std::sin (2.0 * 3.14159265358979 * 220.0 * t));
+        for (int ch = 0; ch < numCh; ++ch) probe.data[(std::size_t) ch][(std::size_t) i] = v;
+    }
+
+    // シフト無し（1.0）で流す。遅延はシフト量に依らないので、これで代表させる。
+    auto out = renderOffline (probe, 0, n, numCh, sampleRate, 1.0, 1.0, mode);   // シフト無しで遅延だけ見る
+
+    int lat = 0;
+    if (! out.empty() && ! out[0].empty())
+    {
+        float peak = 0.0f;
+        for (int ch = 0; ch < numCh; ++ch)
+            for (float v : out[(std::size_t) ch]) peak = std::max (peak, std::abs (v));
+        const float thr = std::max (1.0e-4f, peak * 0.05f);
+        std::int64_t on = -1;
+        for (std::size_t i = 0; i < out[0].size(); ++i)
+        {
+            float mx = 0.0f;
+            for (int ch = 0; ch < numCh; ++ch) mx = std::max (mx, std::abs (out[(std::size_t) ch][i]));
+            if (mx > thr) { on = (std::int64_t) i; break; }
+        }
+        if (on >= 0)
+            lat = (int) std::clamp<std::int64_t> (on - sil, 0, (std::int64_t) (sampleRate * 0.5));
+    }
+
+    std::lock_guard<std::mutex> lk (renderLock);
+    latencyCache[key] = lat;
+    return lat;
+}
+
 std::vector<std::vector<float>>
 ElastiqueDirect::renderOffline (const SampleBuffer& src,
                                 std::int64_t base, std::int64_t n,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+#include <tuple>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -50,22 +52,31 @@ public:
     /** REAPER が入っていそうな既定の候補パス（先頭優先）。UI の初期値に使う。 */
     static std::vector<std::string> defaultCandidates();
 
-    /** CreateInstance_E3 の第4引数。**実測で使えるのは 2 と 3 だけ。**
+    /** CreateInstance_E3 の第4引数。**SDK が無いので番号と実装の対応は実測で決めている。**
 
-        mode 0/1 もインスタンス生成には成功するが、この 1:1 の ProcessData
-        （入力 n サンプル → 出力 n サンプル）では 3 オクターブ下がった音になる。
-        別の呼び出し規約（GetFramesNeeded による可変入力）が要ると思われるので使わない。
+        実測（220Hz 倍音列・ステレオ 1.5秒、シフト無しで固有遅延、+7半音で音程と多声）:
 
-        - `Pro`     (2): 多声OK。-39〜+48 半音まで音程・レベルとも正確。
-        - `Soloist` (3): 単声専用。和音だと片方の声部が消える。
-                         下方向でレベルが pitch² 程度に落ちる（-24半音で入力の約4%）。
+          mode | 遅延      | 多声 | 音程 | 1半音の処理時間 | 判定
+          -----+-----------+------+------+-----------------+--------------------------
+             0 | 4608      | OK   | 正確 | 43 ms           | 最も重く遅延も最大 → Pro
+             1 | 4096      | OK   | 正確 | 27 ms           | 中間
+             2 | 4096      | OK   | 正確 | 14 ms           | 最も軽い。5,6 と数値が完全一致
+             3 | 0         | 単声 | ---  | 24 ms           | SOLO
+             4 | -64       | ---  | 1oct下| ---            | 壊れている。使わない
+          5 以上 | 2 と同一 |      |      |                 | 範囲外→既定へ丸められる
 
-        注意: DLL の RTTI には Pro / Eff / Eff-mobile / SOLO の4系統があるが、
-        **mode 2 がそのどれかは SDK が無いので断定できていない**。多声で動くことを
-        実測したうえで UI 表記を "Elastique Pro" としているだけで、内部的に本当に
-        CElastiqueProV3 かは未確認。
+        DLL の RTTI には CElastiqueProV3 / CElastiqueV3(Eff) / CElastiqueEffV3mobile /
+        CelastiqueSOLOV3 の4系統があり、それぞれ Direct 版も持つ。うちが叩いている
+        ProcessData は入出力 1:1 なので Direct 系にあたる。
+
+        - `Pro`     (0): 多声OK。遅延 4608、処理時間は mode 2 の約3倍。音質が最も良い。
+        - `Soloist` (3): 単声専用。和音だと片方の声部が消える（実測: 上声が 8% まで落ちる）。
+
+        以前は Pro を 2 にしていたが、2 は最も軽く 5/6 と数値が一致することから
+        既定へ丸められている疑いがあり、実際 0 に変えたほうが音が良いと確認できた。
+        「mode 0/1 は3オクターブ下がる」という以前の記述は誤りで、どちらも正確に鳴る。
     */
-    enum Mode { Pro = 2, Soloist = 3 };
+    enum Mode { Pro = 0, Soloist = 3 };
 
     /** そのモードで音程・レベルが信用できる半音範囲（実測）。範囲外は空を返す。 */
     // 使える範囲はモードごとに違う。**変えるときは必ず実測すること。**
@@ -96,6 +107,15 @@ public:
                                                    double pitch, double timeRatio,
                                                    Mode mode) const;
 
+    /** そのモード/SR/チャンネル数での固有遅延（サンプル）。初回に実測してキャッシュする。
+
+        振幅の閾値で「音の頭」を探す方式は使えない。素材が最初から大きいと閾値が
+        実レイテンシより手前で反応し、その差のぶん中身が前倒しになって**末尾が欠ける**
+        （実測: 原音の末尾に置いた 100ms の無音がキャッシュでは 61ms しか残らず、
+        39ms ぶん失われていた。そのせいで波形の途中で終わり、発音のたびにプチッと鳴る）。
+        無音→バーストを流して遅延そのものを測れば、素材によらず正しく揃う。 */
+    int latencySamples (int numChannels, double sampleRate, Mode mode) const;
+
 private:
     void* lib = nullptr;          // HMODULE（windows.h をヘッダに持ち込まない）
     void* createFn  = nullptr;
@@ -106,6 +126,8 @@ private:
     // 公式に保証されていない（SDK が無く RE で使っている）。実験機能なので安全側に倒し、
     // レンダを直列化する。並列度が落ちるだけで結果は変わらない。
     mutable std::mutex renderLock;
+    // 実測した固有遅延のキャッシュ。キーは (mode, サンプルレート, チャンネル数)。
+    mutable std::map<std::tuple<int, int, int>, int> latencyCache;
 };
 
 } // namespace otomad
