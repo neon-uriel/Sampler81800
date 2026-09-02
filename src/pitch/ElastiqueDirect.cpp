@@ -20,6 +20,13 @@ namespace otomad
 
 namespace
 {
+    // 素材の前に流す無音の長さ。プライミングで捨てられるぶんを吸収する。
+    // feedChunk のチャンク長(1024)の整数倍で、実測の固有遅延(4610)より十分大きく取る。
+    constexpr std::int64_t kFeedPadding = 8192;
+}
+
+namespace
+{
     // RE で復元した ABI。公式 SDK が無いのでここに固めておく。
     using CreateInstanceE3  = void* (*) (int blockSize, int channels, float sampleRate, int mode);
     using DestroyInstanceE3 = void  (*) (void*);
@@ -128,40 +135,48 @@ int ElastiqueDirect::latencySamples (int numChannels, double sampleRate, Mode mo
             return it->second;
     }
 
-    // 無音 0.1秒 → 220Hz バースト 0.2秒
-    const std::int64_t sil = (std::int64_t) (sampleRate * 0.1);
-    const std::int64_t n   = sil + (std::int64_t) (sampleRate * 0.2);
+    // **閾値で立ち上がりを探してはいけない。** 出力は遅延ぶん遅れて始まるだけでなく、
+    // 立ち上がり方もアルゴリズム依存なので、閾値だと材料次第で早くも遅くも反応する。
+    // 実際、サイン波で測ると実際の群遅延より 1022 サンプル手前を返し、808 のような
+    // 立ち上がりの速い素材で先頭に無音が残って段差になった。
+    // 白色雑音を流して相互相関の山を取れば、材料や閾値に依存せず遅延そのものが出る。
+    const std::int64_t n = (std::int64_t) (sampleRate * 0.4);
     SampleBuffer probe;
     probe.numChannels = numCh;
     probe.sampleRate  = sampleRate;
     probe.numSamples  = n;
     probe.data.assign ((std::size_t) numCh, std::vector<float> ((std::size_t) n, 0.0f));
-    for (std::int64_t i = sil; i < n; ++i)
+    std::uint32_t seed = 12345u;   // 決定的にする（測るたびに値が変わらないように）
+    for (std::int64_t i = 0; i < n; ++i)
     {
-        const double t = (double) (i - sil) / sampleRate;
-        const float v = (float) (0.5 * std::sin (2.0 * 3.14159265358979 * 220.0 * t));
+        seed = seed * 1103515245u + 12345u;
+        const float v = 0.5f * ((float) ((int) ((seed >> 16) & 0x7fff) - 16384) / 16384.0f);
         for (int ch = 0; ch < numCh; ++ch) probe.data[(std::size_t) ch][(std::size_t) i] = v;
     }
 
     // シフト無し（1.0）で流す。遅延はシフト量に依らないので、これで代表させる。
-    auto out = renderOffline (probe, 0, n, numCh, sampleRate, 1.0, 1.0, mode);   // シフト無しで遅延だけ見る
+    auto out = renderOffline (probe, 0, n, numCh, sampleRate, 1.0, 1.0, mode);
 
     int lat = 0;
     if (! out.empty() && ! out[0].empty())
     {
-        float peak = 0.0f;
-        for (int ch = 0; ch < numCh; ++ch)
-            for (float v : out[(std::size_t) ch]) peak = std::max (peak, std::abs (v));
-        const float thr = std::max (1.0e-4f, peak * 0.05f);
-        std::int64_t on = -1;
-        for (std::size_t i = 0; i < out[0].size(); ++i)
+        // 入力の [w0, w0+win) と、出力を lag ずらしたものとの相関が最大になる lag を探す。
+        const std::int64_t maxLag = (std::int64_t) (sampleRate * 0.3);
+        const std::int64_t win    = std::min<std::int64_t> (4096, n / 4);
+        const std::int64_t w0     = n / 4;
+        const auto& x = probe.data[0];
+        const auto& y = out[0];
+        double best = -1.0e30;
+        std::int64_t bestLag = 0;
+        for (std::int64_t lag = 0; lag <= maxLag; ++lag)
         {
-            float mx = 0.0f;
-            for (int ch = 0; ch < numCh; ++ch) mx = std::max (mx, std::abs (out[(std::size_t) ch][i]));
-            if (mx > thr) { on = (std::int64_t) i; break; }
+            if (w0 + lag + win > (std::int64_t) y.size()) break;
+            double acc = 0.0;
+            for (std::int64_t i = 0; i < win; ++i)
+                acc += (double) x[(std::size_t) (w0 + i)] * y[(std::size_t) (w0 + lag + i)];
+            if (acc > best) { best = acc; bestLag = lag; }
         }
-        if (on >= 0)
-            lat = (int) std::clamp<std::int64_t> (on - sil, 0, (std::int64_t) (sampleRate * 0.5));
+        lat = (int) bestLag;
     }
 
     std::lock_guard<std::mutex> lk (renderLock);
@@ -251,6 +266,20 @@ ElastiqueDirect::renderOffline (const SampleBuffer& src,
         return true;
     };
 
+    // 0) **素材の前に無音を詰める。**
+    //    feedChunk は起動プライミング中（rc != 0）の出力を捨てるが、そのとき入力は
+    //    消費済みなので、いきなり素材を流すと**素材の先頭がそのぶん失われる**。
+    //    実測: 808 のような立ち上がりの速い素材で、先頭 1024 サンプル（＝1ブロック）が
+    //    無音になり、その直後に振幅 0.668 へ跳んで盛大にプチッと鳴っていた。
+    //    先に無音を流しておけばプライミングが無音を食うので素材は削られない。
+    //    捨てられるぶんは呼び出し側が固有遅延（latencySamples）で切り落とす。
+    //    この関数は遅延の実測にも使われるので、詰め物の量は常に同じにすること。
+    for (std::int64_t p2 = 0; p2 < kFeedPadding; p2 += render)
+    {
+        for (auto& b : inBuf) std::fill (b.begin(), b.end(), 0.0f);
+        feedChunk();
+    }
+
     // 1) 実入力を供給
     for (std::int64_t pos = 0; pos < n; pos += render)
     {
@@ -268,8 +297,8 @@ ElastiqueDirect::renderOffline (const SampleBuffer& src,
     // 2) 内部に溜まった本体を無音で押し出す。
     //    プライミング（~5120サンプル）ぶん遅れて出てくるので、実音が揃うまで流す。
     const std::int64_t maxLead = (std::int64_t) (0.3 * sampleRate);
-    const std::int64_t target  = expectedLen + maxLead + (std::int64_t) (0.25 * sampleRate);
-    const std::int64_t maxSilence = std::max (expectedLen, n) + 2 * (std::int64_t) sampleRate;
+    const std::int64_t target  = kFeedPadding + expectedLen + maxLead + (std::int64_t) (0.25 * sampleRate);
+    const std::int64_t maxSilence = kFeedPadding + std::max (expectedLen, n) + 2 * (std::int64_t) sampleRate;
 
     for (auto& b : inBuf) std::fill (b.begin(), b.end(), 0.0f);
 
