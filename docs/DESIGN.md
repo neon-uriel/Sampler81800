@@ -554,6 +554,7 @@ bool Voice::isFinished() const noexcept
 | `durationMode` | choice | Natural/Sync/Manual | Natural | §4.7。Varispeed時はNatural固定 |
 | `syncLength` | choice | 1/4,1/2,1,2,4拍 | 1拍 | Sync時のみ有効 |
 | `stretchAmount` | float | 0.25..4.0 x (skew) | 1.0 | Manual時のみ有効 |
+| `cacheFallback` | choice | Varispeed/WSOLA/Phase Vocoder | Varispeed | REAPER Shifter のキャッシュを外した音を鳴らすエンジン。申告レイテンシはこのエンジンの固有遅延になり、キャッシュ再生側は先頭無音で揃える（`Voice::NoteOptions::alignLatency`） |
 | `formant` | float | -12..12 st | 0 | 対応エンジンのみ |
 | `portaMode` | choice | Off/Legato/Always | Legato | Polyでも有効 (§3.4) |
 | `glideGroupMs` | float | 0..100 ms | 30 | 和音グループ判定の間隔 |
@@ -1521,6 +1522,10 @@ pluginval --strictness-level 10 --validate build/.../OtoMadSampler.vst3
 ### 挙動
 15. エンジンが使えない場合は代替エンジンにフォールバックする。**無音を返さない。**
     フォールバック中であることを UI に表示する。
+    REAPER Shifter のキャッシュ経路では「鍵ごと」にフォールバックが起きる（範囲外・生成待ちの
+    半音だけ Varispeed で鳴る）ので、プラグイン単位の表示だけでは足りない。鍵盤の各鍵に
+    範囲外 / 生成待ち を塗り分け、実際に Varispeed で鳴った鍵を一瞬点灯させる
+    （`keyCacheState` / `fetchKeyActivity` → WebEditor の `keys` イベント）。
 16. サンプルは原音SRで保持・埋め込みする。SR変更時は原音から一度だけ変換し、
     再生用バッファを再リサンプルしない（二重変換禁止）。
 17. `setLatencySamples()` を鳴動中に変えない。固定レイテンシ方式を守る。

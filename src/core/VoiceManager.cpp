@@ -66,7 +66,7 @@ void VoiceManager::rematchGroupOrigins()
 
 void VoiceManager::noteOn (int note, float vel, const SampleBuffer* sample,
                            float s01, float e01, bool snap,
-                           bool useVarispeed, float prePitchedSemi)
+                           Voice::NoteOptions opts)
 {
     const auto now = sampleCounter;
 
@@ -84,13 +84,13 @@ void VoiceManager::noteOn (int note, float vel, const SampleBuffer* sample,
         {
             // Always: 音が切れていても直前ノートのピッチから滑らせて発音する。
             // requestSteal 経由で、前の音が残っていれば短いフェードで切替（リトリガーのプチ音防止）。
-            v.requestSteal (sample, note, vel, s01, e01, snap, true, lastMonoPitch, useVarispeed, prePitchedSemi);
+            v.requestSteal (sample, note, vel, s01, e01, snap, true, lastMonoPitch, opts);
         }
         else
         {
             // モノのリトリガー: requestSteal で旧音を短時間フェードしてから新音を開始（デクリック）。
             // アイドル時は即発音になる。ハードな noteOn だと波形の段差で「ぷつっ」と鳴る。
-            v.requestSteal (sample, note, vel, s01, e01, snap, false, (float) note, useVarispeed, prePitchedSemi);
+            v.requestSteal (sample, note, vel, s01, e01, snap, false, (float) note, opts);
         }
 
         voiceOnTime[0] = now;
@@ -124,9 +124,9 @@ void VoiceManager::noteOn (int note, float vel, const SampleBuffer* sample,
 
     const bool steal = v.isActive() && v.getNote() != note;
     if (steal)
-        v.requestSteal (sample, note, vel, s01, e01, snap, false, (float) note, useVarispeed, prePitchedSemi);
+        v.requestSteal (sample, note, vel, s01, e01, snap, false, (float) note, opts);
     else
-        v.noteOn (sample, note, vel, s01, e01, snap, false, (float) note, useVarispeed, prePitchedSemi);
+        v.noteOn (sample, note, vel, s01, e01, snap, false, (float) note, opts);
 
     voiceOnTime[(std::size_t) slot] = now;
 

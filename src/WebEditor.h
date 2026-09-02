@@ -97,6 +97,7 @@ private:
     juce::String lastStatusJson;  // 同じ内容の連投を避ける
     juce::String lastLoadErrorSeen;   // 読み込み失敗メッセージの再送判定
     juce::String lastShifterText;     // SHIFTER 欄の文言の再送判定
+    juce::String lastKeyState, lastKeyHeld;   // 鍵盤表示（keys イベント）の再送判定
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OtoMadSamplerWebEditor)
 };

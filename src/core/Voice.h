@@ -68,18 +68,21 @@ public:
     void setEngineControl (const EngineControl& c) noexcept;   // fallback判定込み
     bool isFallbackActive() const noexcept { return fallbackActive; }
 
-    // useVarispeed: このノートは Varispeed で鳴らす（キャッシュ再生/フォールバック用）。
-    // prePitchedSemi: sample が既に何半音シフト済みか（cached再生で二重シフトを避ける）。
+    struct NoteOptions
+    {
+        int   forcedAlgorithm = -1;     // このノートだけ使うエンジン。-1 で EngineControl::algorithm
+        float prePitchedSemi  = 0.0f;   // sample に焼き込み済みのシフト量（二重シフト防止）
+        int   alignLatency    = 0;      // 出力を揃える遅延。固有遅延との差分を先頭無音にする（申告値を渡す）
+    };
+
     void noteOn (const SampleBuffer* sample, int midiNote, float velocity,
                  float sampleStart01, float sampleEnd01, bool snapZeroCross,
-                 bool glide, float originNote,
-                 bool useVarispeed = false, float prePitchedSemi = 0.0f);
+                 bool glide, float originNote, NoteOptions opts = {});
     void glideTo (int midiNote) noexcept;
     void setGlideOrigin (float originNote) noexcept;
     void requestSteal (const SampleBuffer* sample, int midiNote, float velocity,
                        float sampleStart01, float sampleEnd01, bool snapZeroCross,
-                       bool glide, float originNote,
-                       bool useVarispeed = false, float prePitchedSemi = 0.0f);
+                       bool glide, float originNote, NoteOptions opts = {});
     void noteOff() noexcept;
     void stop() noexcept;
 
@@ -111,16 +114,18 @@ private:
         int note = 0; float vel = 0.0f;
         float s01 = 0.0f, e01 = 1.0f; bool snap = false;
         bool glide = false; float originNote = 0.0f;
-        bool useVarispeed = false; float prePitchedSemi = 0.0f;
+        NoteOptions opts;
     };
     void startNote (const Pending& p) noexcept;
     double resolveTimeRatio() noexcept;
     IPitchEngine* pickEngine (int algorithm) noexcept;
+    IPitchEngine* engineOrFallback (int algorithm) noexcept;   // pickEngine と同じ対応、fallbackActive は触らない
 
     bool   active = false;
     bool   released = false;
-    bool   useVarispeed = false;      // cached再生/フォールバック時 true
+    int    forcedAlgorithm = -1;      // このノートだけ使うエンジン（-1 = control.algorithm に従う）
     float  prePitchedSemi = 0.0f;     // sample が既にシフト済みの半音
+    int    startDelay = 0;            // 整列用の前置無音の残り（NoteOptions::alignLatency 参照）
     int    midiNote = -1;
     float  velocity = 1.0f;
     double srcPos = 0.0;

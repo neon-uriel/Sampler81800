@@ -39,6 +39,7 @@ inline constexpr const char* reaperMode    = "reaperMode";
 inline constexpr const char* reaperSubMode = "reaperSubMode";
 inline constexpr const char* phaseLock     = "phaseLock";
 inline constexpr const char* elastiqueMode = "elastiqueMode";
+inline constexpr const char* cacheFallback = "cacheFallback";
 // ビブラート（発音から delay 経過後、fade で depth へ到達）
 inline constexpr const char* vibDepth      = "vibDepth";
 inline constexpr const char* vibRate       = "vibRate";
@@ -117,6 +118,9 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     // 下方向シフトでレベルが pitch² 程度に落ちる（実測）。
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { elastiqueMode, 1 }, "elastique Mode",
                     StringArray { "Elastique Pro", "Soloist" }, 0));
+    // キャッシュを外した音を鳴らすエンジン。index は algorithm の 0..2 と一致させる（そのまま渡すため）。
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { cacheFallback, 1 }, "Cache Fallback",
+                    StringArray { "Varispeed", "WSOLA", "Phase Vocoder" }, 0));
 
     // ビブラート。Depth=0 で無効。Delay は効き始めるまで、Fade は最大振幅に達するまでの時間。
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { vibDepth, 1 }, "Vib Depth",

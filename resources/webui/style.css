@@ -265,10 +265,21 @@ input[type="range"] { accent-color: var(--accent); width: 100%; cursor: pointer;
              background: linear-gradient(#3d444b 0%, #0d1013 78%);
              box-shadow: 0 2px 4px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.14); }
 .key.white:hover { background: linear-gradient(#fff, #e2ecf3 70%, #c6d4de); }
-.key.white.down  { background: linear-gradient(#cfeeff, #7ec8f2); }
-.key.black.down  { background: linear-gradient(var(--accent-lo), #0f4468); }
+.key.white.down, .key.white.midi { background: linear-gradient(#cfeeff, #7ec8f2); }
+.key.black.down, .key.black.midi { background: linear-gradient(var(--accent-lo), #0f4468); }
 .key.root::after { content: ""; position: absolute; inset: auto 0 0 0; height: 18%;
                    background: var(--warn); box-shadow: 0 0 6px rgba(255,159,74,.9); }
+/* フォールバック表示。.fb = 作れない鍵（斜線） / .pend = 生成待ち（薄い点々） / .miss = 直前にキャッシュを外した鍵（赤く一瞬） */
+.key.white.fb   { background: repeating-linear-gradient(135deg, #f7d9d9 0 4px, #e39a9a 4px 6px); }
+.key.black.fb   { background: repeating-linear-gradient(135deg, #4a1f1f 0 4px, #8a3a3a 4px 6px); }
+.key.white.pend { background: repeating-linear-gradient(135deg, #f0f3f6 0 4px, #d7dde3 4px 6px); }
+.key.black.pend { background: repeating-linear-gradient(135deg, #2a3138 0 4px, #14181c 4px 6px); }
+.key.miss, .key.white.miss.midi, .key.black.miss.midi
+                { background: linear-gradient(#ff8a8a, #d23838) !important;
+                  box-shadow: 0 0 8px rgba(255,80,80,.9); }
+.key-legend { display: flex; align-items: center; gap: 4px; }
+.key-legend .sw { display: inline-block; width: 10px; height: 8px; border-radius: 1px;
+                  background: repeating-linear-gradient(135deg, #f7d9d9 0 3px, #e39a9a 3px 5px); }
 
 
 /* ---- ピッチ平坦化（SAMPLE パネル内） ---- */

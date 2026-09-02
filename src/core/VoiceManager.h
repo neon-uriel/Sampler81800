@@ -51,7 +51,7 @@ public:
 
     void noteOn (int note, float velocity, const SampleBuffer* sample,
                  float sampleStart01, float sampleEnd01, bool snapZeroCross,
-                 bool useVarispeed = false, float prePitchedSemi = 0.0f);
+                 Voice::NoteOptions opts = {});
     void noteOff (int note);
     void allNotesOff();
 

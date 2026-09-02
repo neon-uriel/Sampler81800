@@ -155,7 +155,7 @@ TEST_CASE ("cached playback uses varispeed from the very first note", "[voice][e
     // の順に進む。つまり setEngineControl は**発音より前**にしか来ない。
     //
     // キャッシュ経路（REAPER Shifter が事前レンダした素材を Varispeed で読む）では
-    // noteOn の時点で初めて useVarispeed が true になるが、startNote が activeEngine を
+    // noteOn の時点で初めて forcedAlgorithm が Varispeed になるが、startNote が activeEngine を
     // 選び直していないと、その音は直前の設定＝REAPER Shifter のフォールバック先である
     // Phase Vocoder のまま鳴り始める。エンベロープも PV のレイテンシぶん遅らされるので、
     // プラグインを読み込んだ直後の音だけ頭が欠けて聞こえる。
@@ -179,7 +179,7 @@ TEST_CASE ("cached playback uses varispeed from the very first note", "[voice][e
         ec.durationMode = 0;
         v.setEngineControl (ec);
 
-        v.noteOn (&src, 60, 0.9f, 0.0f, 1.0f, false, false, 60.0f, /*useVarispeed*/ true, 0.0f);
+        v.noteOn (&src, 60, 0.9f, 0.0f, 1.0f, false, false, 60.0f, Voice::NoteOptions { /*Varispeed*/ 0, 0.0f, 0 });
         if (refreshAfterNoteOn)
             v.setEngineControl (ec);   // 次のブロックで来る更新（＝2音目以降の状態）
 
@@ -201,5 +201,50 @@ TEST_CASE ("cached playback uses varispeed from the very first note", "[voice][e
     {
         INFO ("sample " << i);
         REQUIRE (std::abs (first[i] - warm[i]) < 1.0e-6f);
+    }
+}
+
+TEST_CASE ("alignLatency delays a zero-latency voice by exactly that many samples", "[voice][engines]")
+{
+    // キャッシュ再生（Varispeed, 遅延0）とフォールバック先（PV 等, 遅延N）を同じインスタンスで
+    // 混ぜるとき、申告レイテンシは N になる。Varispeed 側は先頭に N の無音を置いて揃える。
+    EngineResources res;
+    res.prepare (SR);
+    auto src = test::makeSine (440.0, SR, 1.0);
+
+    auto renderNote = [&res, &src] (int align, int block)
+    {
+        Voice v;
+        v.prepare (SR, BLOCK, 1, res, nullptr);
+        Voice::Params p;
+        p.rootKey = 60;
+        p.gainLin = 1.0f;
+        v.setParams (p);
+        v.setAdsr (0.0f, 0.010f, 1.0f, 0.010f);
+        v.setEngineControl ({});
+        v.noteOn (&src, 60, 0.9f, 0.0f, 1.0f, false, false, 60.0f, Voice::NoteOptions { 0, 0.0f, align });
+
+        std::vector<float> out ((std::size_t) BLOCK * 8, 0.0f);
+        for (int pos = 0; pos < (int) out.size(); pos += block)
+        {
+            float* ptrs[1] = { out.data() + pos };
+            v.render (ptrs, 1, std::min (block, (int) out.size() - pos));
+        }
+        return out;
+    };
+
+    const int align = 700;   // ブロック長の倍数でない値にして、ブロック内オフセットの経路を通す
+    const auto plain   = renderNote (0, BLOCK);
+    const auto delayed = renderNote (align, BLOCK);
+    const auto delayed1 = renderNote (align, 1);   // 規約7: n == 1 でも同じ結果
+
+    for (int i = 0; i < align; ++i)
+        REQUIRE (delayed[(std::size_t) i] == 0.0f);
+
+    for (std::size_t i = 0; i + (std::size_t) align < delayed.size(); ++i)
+    {
+        INFO ("sample " << i);
+        REQUIRE (std::abs (delayed[i + (std::size_t) align] - plain[i]) < 1.0e-6f);
+        REQUIRE (std::abs (delayed1[i + (std::size_t) align] - plain[i]) < 1.0e-6f);
     }
 }

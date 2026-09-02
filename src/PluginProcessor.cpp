@@ -77,6 +77,7 @@ OtoMadSamplerProcessor::OtoMadSamplerProcessor()
     pReaperMode    = apvts.getRawParameterValue (otomad::params::reaperMode);
     pReaperSubMode = apvts.getRawParameterValue (otomad::params::reaperSubMode);
     pElastiqueMode = apvts.getRawParameterValue (otomad::params::elastiqueMode);
+    pCacheFallback = apvts.getRawParameterValue (otomad::params::cacheFallback);
     pVibDepth    = apvts.getRawParameterValue (otomad::params::vibDepth);
     pVibRate     = apvts.getRawParameterValue (otomad::params::vibRate);
     pVibDelay    = apvts.getRawParameterValue (otomad::params::vibDelay);
@@ -118,6 +119,10 @@ OtoMadSamplerProcessor::~OtoMadSamplerProcessor()
 void OtoMadSamplerProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     hostSampleRate.store (sampleRate);
+
+    // 再初期化で noteOff が届かないまま止まった鍵を「押されたまま」で光らせ続けない。
+    for (auto* bits : { heldNoteBits, noteOnLatchBits, missLatchBits })
+        for (int w = 0; w < 2; ++w) bits[w].store (0, std::memory_order_relaxed);
 
     // 再生用バッファ(data)がホストSRと違うSRで作られていたら作り直す（規約16）。
     // 再生側は data が既にホストSRである前提で読むので、ズレるとそのまま音程が狂う
@@ -255,18 +260,31 @@ void OtoMadSamplerProcessor::handleMidiMessage (const juce::MidiMessage& msg) no
         const float s = pSampleStart->load(), e = pSampleEnd->load();
         const bool  snap = pSnap->load() > 0.5f;
 
+        // 鍵盤表示用（atomic のみ）。held は現在押されている鍵、latch は前回 UI が読んでから
+        // 一度でも鳴った鍵。UI のポーリングより短いノートも 1 フレームは光らせるため。
+        if (note >= 0 && note < 128)
+        {
+            const std::uint64_t bit = 1ull << (note & 63);
+            heldNoteBits[note >> 6].fetch_or (bit, std::memory_order_relaxed);
+            noteOnLatchBits[note >> 6].fetch_or (bit, std::memory_order_relaxed);
+        }
+
         if (useCachePath())
         {
             const int semi = juce::jlimit (otomad::PitchCache::kMin, otomad::PitchCache::kMax,
                                            note - (int) pRootKey->load() + (int) pPitchSemi->load()
                                              + 12 * (int) pOctave->load());
+            const int fbAlgo = cacheFallbackAlgorithm();
+            const int align  = voices.getLatencyFor (fbAlgo);   // desiredLatency と同じ値。全ノートをこれに揃える
             if (const auto* cached = pitchCache.lookup (semi))
-                // キャッシュはトリム範囲だけをレンダ済み → 全体(0..1)を再生（二重トリム防止）
-                voices.noteOn (note, vel, cached, 0.0f, 1.0f, snap, true, (float) semi);
+                // キャッシュはトリム範囲だけをレンダ済み → 全体(0..1)を Varispeed で等速再生（二重トリム防止）
+                voices.noteOn (note, vel, cached, 0.0f, 1.0f, snap, { 0, (float) semi, align });
             else
             {
                 pitchCache.request (semi);                                           // 背景でレンダリング要求
-                voices.noteOn (note, vel, activeSample.load(), s, e, snap, true, 0.0f); // 一発目は Varispeed で綺麗に（原音をトリム）
+                voices.noteOn (note, vel, activeSample.load(), s, e, snap, { fbAlgo, 0.0f, align });   // 原音をフォールバック先で
+                if (note >= 0 && note < 128)   // 鍵盤表示用（規約15）
+                    missLatchBits[note >> 6].fetch_or (1ull << (note & 63), std::memory_order_relaxed);
             }
         }
         else
@@ -276,7 +294,10 @@ void OtoMadSamplerProcessor::handleMidiMessage (const juce::MidiMessage& msg) no
     }
     else if (msg.isNoteOff())
     {
-        voices.noteOff (msg.getNoteNumber());
+        const int note = msg.getNoteNumber();
+        if (note >= 0 && note < 128)
+            heldNoteBits[note >> 6].fetch_and (~(1ull << (note & 63)), std::memory_order_relaxed);
+        voices.noteOff (note);
     }
     else if (msg.isPitchWheel())
     {
@@ -285,8 +306,25 @@ void OtoMadSamplerProcessor::handleMidiMessage (const juce::MidiMessage& msg) no
     }
     else if (msg.isAllNotesOff() || msg.isAllSoundOff())
     {
+        heldNoteBits[0].store (0, std::memory_order_relaxed);
+        heldNoteBits[1].store (0, std::memory_order_relaxed);
         voices.allNotesOff();
     }
+}
+
+int OtoMadSamplerProcessor::keyCacheState (int note) const noexcept
+{
+    if (! useCachePath())
+        return 0;   // キャッシュを使わない経路。鍵ごとの差は無い
+    const int semi = note - (int) pRootKey->load() + (int) pPitchSemi->load()
+                   + 12 * (int) pOctave->load();
+    int lo = 0, hi = 0;
+    pitchCache.usableRange (lo, hi);
+    // handleMidiMessage は semi を ±96 に clamp してから lookup するので、ここも同じ値で判定する。
+    const int clamped = juce::jlimit (otomad::PitchCache::kMin, otomad::PitchCache::kMax, semi);
+    if (clamped < lo || clamped > hi || pitchCache.isFailed (clamped))
+        return 2;   // この設定では作れない → 常にフォールバック
+    return pitchCache.lookup (clamped) != nullptr ? 0 : 1;
 }
 
 //==============================================================================

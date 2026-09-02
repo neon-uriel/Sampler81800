@@ -100,6 +100,13 @@ public:
         for (auto& w : failed) n += std::popcount (w.load());
         return n;
     }
+    // その音程が「この設定では作れない」と記録済みか（UI の鍵盤表示用。atomic のみ）。
+    bool isFailed (int semi) const noexcept
+    {
+        if (semi < kMin || semi > kMax) return true;
+        const int bit = semi - kMin;
+        return (failed[(std::size_t) (bit >> 6)].load (std::memory_order_acquire) & (1ull << (bit & 63))) != 0;
+    }
 
     // いま実際に生成できる半音範囲（configure が更新する。UI/プリウォームの参照用）。
     void usableRange (int& lo, int& hi) const noexcept

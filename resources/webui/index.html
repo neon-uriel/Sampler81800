@@ -130,6 +130,8 @@
       <div class="row">
         <label class="field wide"><span>elastique (非REAPER)</span>
           <select id="sel-elastiqueMode"></select></label>
+        <label class="field wide"><span>FALLBACK</span>
+          <select id="sel-cacheFallback"></select></label>
       </div>
       <div class="reaper-info" id="reaper-info">—</div>
     </section>
@@ -138,7 +140,9 @@
   <section class="panel">
     <div class="panel-head">
       <span class="led"></span><span class="title">KEYBOARD</span>
-      <span class="spacer"></span><span class="tip">右クリックで ROOT を指定</span>
+      <span class="spacer"></span>
+      <span class="tip key-legend" id="key-legend" hidden><span class="sw"></span>= Shifter の範囲外（フォールバック: <span id="key-legend-fb">Varispeed</span>）</span>
+      <span class="tip">右クリックで ROOT を指定</span>
     </div>
     <div class="keys" id="keys"></div>
   </section>

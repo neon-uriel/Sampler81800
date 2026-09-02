@@ -26,7 +26,7 @@ namespace
     const char* const kComboParams[] =
     {
         P::algorithm, P::durationMode, P::syncLength, P::portaMode,
-        P::polyMode, P::portaShape, P::interpQuality, P::elastiqueMode,
+        P::polyMode, P::portaShape, P::interpQuality, P::elastiqueMode, P::cacheFallback,
     };
 
     // getToggleState(name)
@@ -196,7 +196,9 @@ OtoMadSamplerWebEditor::OtoMadSamplerWebEditor (OtoMadSamplerProcessor& p)
     web->goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
     processor.checkForUpdatesAsync();
-    startTimerHz (10);
+    // 20Hz。鍵盤の点灯を運ぶので 10Hz だと押してから光るまでが目に見えて遅れる。
+    // status 側は内容比較で早期棄却するので、周期を上げても JSON 化の回数は増えない。
+    startTimerHz (20);
 
     // 全パネル（SAMPLE / ENV+PITCH / ENGINE+REAPER / KEYBOARD）が収まる既定サイズ。
     // 幅が狭いと ENGINE のセレクトが折り返して縦に伸び、鍵盤が切れる。
@@ -704,8 +706,39 @@ void OtoMadSamplerWebEditor::timerCallback()
         }
     }
 
+    // 鍵盤表示。status と別イベントにするのは、点灯は頻繁に変わり status の早期棄却を潰すため。
+    // 128 鍵を 1 文字ずつの文字列で送る（JS は 64bit 整数を扱えない）。
+    //   state: '0' 通常 / '1' 生成待ち / '2' 作れない   held: '0' 離 / '1' 押 / '2' 前回以降に鳴って離された
+    //   miss : '1' 前回以降にキャッシュを外した
+    {
+        std::uint64_t held[2], latched[2], miss[2];
+        processor.fetchKeyActivity (held, latched, miss);
+        juce::String state, heldStr, missStr;
+        state.preallocateBytes (128); heldStr.preallocateBytes (128); missStr.preallocateBytes (128);
+        for (int n = 0; n < 128; ++n)
+        {
+            const std::uint64_t bit = 1ull << (n & 63);
+            const bool h = (held[n >> 6] & bit) != 0;
+            const bool l = (latched[n >> 6] & bit) != 0;
+            state   += (juce::juce_wchar) ('0' + processor.keyCacheState (n));
+            heldStr += (juce::juce_wchar) (h ? '1' : (l ? '2' : '0'));
+            missStr += (juce::juce_wchar) ((miss[n >> 6] & bit) != 0 ? '1' : '0');
+        }
+        // latched/miss は読んだ時点で消えるので、立っていたら必ず送る（比較で落とさない）。
+        const bool transient = (latched[0] | latched[1] | miss[0] | miss[1]) != 0;
+        if (transient || state != lastKeyState || heldStr != lastKeyHeld)
+        {
+            lastKeyState = state; lastKeyHeld = heldStr;
+            auto* k = new juce::DynamicObject();
+            k->setProperty ("state", state);
+            k->setProperty ("held",  heldStr);
+            k->setProperty ("miss",  missStr);
+            web->emitEventIfBrowserIsVisible ("keys", juce::var (k));
+        }
+    }
+
     // 状態（キャッシュ進捗・REAPERモード名・更新有無）。
-    // 10Hz で回るので、まず安価なスカラー比較で早期に抜ける（毎回 JSON 化しない）。
+    // 20Hz で回るので、まず安価なスカラー比較で早期に抜ける（毎回 JSON 化しない）。
     {
         const bool  busy = processor.isCacheBusy();
         const int   prog = juce::roundToInt (processor.getCacheProgress() * 100.0f);

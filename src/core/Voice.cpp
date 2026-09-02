@@ -87,13 +87,20 @@ IPitchEngine* Voice::pickEngine (int algorithm) noexcept
     return e != nullptr ? e : &phaseVocoder;   // 規約15: 無音を返さず代替(PV)へ
 }
 
+IPitchEngine* Voice::engineOrFallback (int algorithm) noexcept
+{
+    auto* e = engineForAlgorithm (algorithm);
+    return e != nullptr ? e : &phaseVocoder;
+}
+
 void Voice::setEngineControl (const EngineControl& c) noexcept
 {
     control = c;
     reaper.setMode (c.reaperMode);
     reaper.setSubMode (c.reaperSubMode);
-    // cached再生/フォールバック中は Varispeed を強制（アルゴリズム選択より優先）
-    activeEngine = useVarispeed ? static_cast<IPitchEngine*> (&varispeed) : pickEngine (c.algorithm);
+    // fallbackActive はアルゴリズム選択に対して判定し、ノート単位の強制エンジンはそれより優先
+    auto* selected = pickEngine (c.algorithm);
+    activeEngine = forcedAlgorithm >= 0 ? engineOrFallback (forcedAlgorithm) : selected;
     phaseVocoder.setPhaseLock (c.phaseLock);
 }
 
@@ -128,8 +135,8 @@ void Voice::startNote (const Pending& p) noexcept
 
     midiNote = p.note;
     velocity = juce::jlimit (0.0f, 1.0f, p.vel);
-    useVarispeed   = p.useVarispeed;
-    prePitchedSemi = p.prePitchedSemi;
+    forcedAlgorithm = p.opts.forcedAlgorithm;
+    prePitchedSemi  = p.opts.prePitchedSemi;
 
     const auto n = p.sample->numSamples;
     const auto s = (std::int64_t) std::floor ((double) juce::jlimit (0.0f, 1.0f, p.s01) * (double) n);
@@ -152,17 +159,21 @@ void Voice::startNote (const Pending& p) noexcept
 
     adsr.setParameters (adsrParams);
 
-    // **エンジンをここで選び直す。** useVarispeed はノートごとに決まる（キャッシュ経路か
+    // **エンジンをここで選び直す。** forcedAlgorithm はノートごとに決まる（キャッシュ経路か
     // フォールバックか）が、setEngineControl はホストの processBlock 冒頭でしか来ないので、
     // 選び直さないとこの音だけ前の設定のまま鳴る。
     // 具体的には、REAPER Shifter を非REAPERホストで使うと activeEngine が
     // フォールバック先の Phase Vocoder になっており、キャッシュ再生の1音目が
     // PV で鳴ってエンベロープも PV のレイテンシぶん遅れる（＝頭が欠ける）。
-    activeEngine = useVarispeed ? static_cast<IPitchEngine*> (&varispeed)
-                                : pickEngine (control.algorithm);
+    activeEngine = forcedAlgorithm >= 0 ? engineOrFallback (forcedAlgorithm)
+                                        : pickEngine (control.algorithm);
 
-    // エンベロープ開始をエンジンのレイテンシ分だけ遅らせる（音の出力遅延と揃える）
-    const int lat = activeEngine ? activeEngine->getIntrinsicLatency() : 0;
+    // 申告レイテンシ(alignLatency)より固有遅延が小さい分は先頭無音で埋め、全ノートの出だしを揃える
+    const int intrinsic = activeEngine ? activeEngine->getIntrinsicLatency() : 0;
+    startDelay = juce::jmax (0, p.opts.alignLatency - intrinsic);
+
+    // エンベロープ開始を実効レイテンシ（固有遅延 + 先頭無音）分だけ遅らせる
+    const int lat = intrinsic + startDelay;
 
     // ビブラートの Delay/Fade も同じ基準にする。負から始めることで、
     // エンベロープと同じタイミング（＝実際に音が出る瞬間）を 0 とみなす。
@@ -188,17 +199,16 @@ void Voice::startNote (const Pending& p) noexcept
 
 void Voice::noteOn (const SampleBuffer* sample, int note, float vel,
                     float s01, float e01, bool snap, bool glide, float originNote,
-                    bool useVarispeed_, float prePitchedSemi_)
+                    NoteOptions opts)
 {
-    startNote (Pending { sample, note, vel, s01, e01, snap, glide, originNote,
-                         useVarispeed_, prePitchedSemi_ });
+    startNote (Pending { sample, note, vel, s01, e01, snap, glide, originNote, opts });
 }
 
 void Voice::requestSteal (const SampleBuffer* sample, int note, float vel,
                           float s01, float e01, bool snap, bool glide, float originNote,
-                          bool useVarispeed_, float prePitchedSemi_)
+                          NoteOptions opts)
 {
-    Pending p { sample, note, vel, s01, e01, snap, glide, originNote, useVarispeed_, prePitchedSemi_ };
+    Pending p { sample, note, vel, s01, e01, snap, glide, originNote, opts };
     if (! active) { startNote (p); return; }
     pending   = p;
     stealing  = true;
@@ -220,7 +230,7 @@ void Voice::noteOff() noexcept
 {
     if (active && ! stealing)
     {
-        const int lat = activeEngine ? activeEngine->getIntrinsicLatency() : 0;
+        const int lat = activeEngine ? activeEngine->getIntrinsicLatency() + startDelay : 0;
         if (lat <= 0) adsr.noteOff();
         else          pendingOff = lat;   // リリースもレイテンシ分遅らせる
         released = true;
@@ -251,6 +261,17 @@ void Voice::render (float* const* out, int numChannels, int n) noexcept
     {
         if (pendingOff <= n) { adsr.noteOff(); pendingOff = -1; }
         else                   pendingOff -= n;
+    }
+
+    // 整列用の先頭無音。ポルタメント/ビブラート/エンベロープはこの間進めない（音が出ていないので）
+    int off = 0;
+    if (startDelay > 0)
+    {
+        const int k = juce::jmin (startDelay, n);
+        startDelay -= k;
+        if (k == n) return;    // 規約7: n == 0 でエンジンを呼ばない
+        off = k;
+        n  -= k;
     }
 
     // timeRatio（20msスムージング, §4.7）
@@ -308,7 +329,7 @@ void Voice::render (float* const* out, int numChannels, int n) noexcept
             if (stealGain < 0.0f) stealGain = 0.0f;
         }
         for (int ch = 0; ch < nch; ++ch)
-            out[ch][i] += scratch[(std::size_t) ch][(std::size_t) i] * g;
+            out[ch][off + i] += scratch[(std::size_t) ch][(std::size_t) i] * g;
     }
 
     if (stealing && stealGain <= 0.0f)

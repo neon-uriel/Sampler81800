@@ -55,6 +55,7 @@ inline const HelpEntry* helpTable (std::size_t& count) noexcept
         { reaperMode,    "REAPER ピッチシフタのモード（élastique / SoundTouch など）" },
         { reaperSubMode, "選択したモードのサブモード" },
         // Web UI で追加されたもの（ネイティブ版には無い）
+        { cacheFallback, "Shifter の範囲外・生成待ちの音を鳴らすエンジン" },
         { elastiqueMode, "REAPER 外で elastique を直読みするときのアルゴリズム。"
                          "通常は Elastique Pro。Soloist は単声専用で、"
                          "シフトすると倍音がほとんど落ちて音が籠る" },

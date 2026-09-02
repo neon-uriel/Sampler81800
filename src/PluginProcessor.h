@@ -188,6 +188,21 @@ public:
         return tot > 0 ? (float) r / (float) tot : 1.0f;
     }
 
+    // 鍵盤表示用（規約15: どの鍵がフォールバックになるかを出す）。
+    // keyCacheState: 0 = 通常 / 1 = キャッシュ生成待ち / 2 = この設定では作れない（常にフォールバック）
+    int  keyCacheState (int note) const noexcept;
+    // held = 押されている鍵、latched = 前回以降に鳴った鍵、miss = 前回以降にキャッシュを外した鍵。
+    // latched/miss は読むと消える。オーディオスレッドが書き、メッセージスレッドが読む（atomic のみ）。
+    void fetchKeyActivity (std::uint64_t held[2], std::uint64_t latched[2], std::uint64_t miss[2]) noexcept
+    {
+        for (int w = 0; w < 2; ++w)
+        {
+            held[w]    = heldNoteBits[w].load (std::memory_order_relaxed);
+            latched[w] = noteOnLatchBits[w].exchange (0, std::memory_order_relaxed);
+            miss[w]    = missLatchBits[w].exchange (0, std::memory_order_relaxed);
+        }
+    }
+
     // ピッチ検出: 現在のサンプル(トリム範囲)の基音を解析して Root を自動設定（メッセージスレッド）。
     // 検出できたら true。明確な音程が無ければ Root は変えず false。
     bool  detectAndSetRoot();
@@ -340,8 +355,10 @@ private:
     // **両辺とも APVTS を正として読む。** 以前は useCachePath() が APVTS（state 復元済み）を、
     // voices.getCurrentLatency() が VoiceManager::engineControl（processBlock でしか更新されない）を
     // 見ていたため、復元直後の prepareToPlay だけ食い違う値を申告していた。
+    // キャッシュ経路ではフォールバック先エンジンの遅延を申告し、キャッシュ再生側をそれに揃える（Voice::NoteOptions::alignLatency）
     int desiredLatency() const noexcept
-    { return useCachePath() ? 0 : voices.getLatencyFor ((int) pAlgorithm->load()); }
+    { return voices.getLatencyFor (useCachePath() ? cacheFallbackAlgorithm() : (int) pAlgorithm->load()); }
+    int cacheFallbackAlgorithm() const noexcept { return juce::jlimit (0, 2, (int) pCacheFallback->load()); }
 
     // REAPER Shifter で Natural / Manual のときキャッシュ経路（Varispeed再生）を使う。
     // formant / stretch はキャッシュに焼き込むので可。Sync はテンポ依存で動的なので除外。
@@ -353,6 +370,11 @@ private:
     }
 
     std::atomic<double> hostSampleRate { 44100.0 };
+
+    // 鍵盤表示用ビット（fetchKeyActivity 参照）。handleMidiMessage が更新する。
+    std::atomic<std::uint64_t> heldNoteBits[2]    { 0, 0 };
+    std::atomic<std::uint64_t> noteOnLatchBits[2] { 0, 0 };
+    std::atomic<std::uint64_t> missLatchBits[2]   { 0, 0 };
 
     // ロックフリー・サンプルスロット。旧バッファは Phase 1 では graveyard で寿命を延ばす
     // （メッセージスレッド専用。Phase 5 で GCスレッド化する）。
@@ -424,6 +446,7 @@ private:
     std::atomic<float>* pReaperMode    = nullptr;
     std::atomic<float>* pReaperSubMode = nullptr;
     std::atomic<float>* pElastiqueMode = nullptr;
+    std::atomic<float>* pCacheFallback = nullptr;
     std::atomic<float>* pVibDepth      = nullptr;
     std::atomic<float>* pVibRate       = nullptr;
     std::atomic<float>* pVibDelay      = nullptr;

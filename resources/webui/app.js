@@ -218,7 +218,7 @@ import ("./juce-index.js").then ((juce) => {
   const HIDDEN_CHOICES = { algorithm: [3, 4] };
 
   for (const id of ["algorithm", "durationMode", "syncLength", "portaMode",
-                    "polyMode", "portaShape", "interpQuality", "elastiqueMode"]) {
+                    "polyMode", "portaShape", "interpQuality", "elastiqueMode", "cacheFallback"]) {
     const sel = document.getElementById ("sel-" + id);
     if (! sel) continue;
     const state = C[id] = getComboBoxState (id);
@@ -309,6 +309,13 @@ import ("./juce-index.js").then ((juce) => {
     // elastique 直読みのモードは「REAPER Shifter 選択中 かつ REAPER 外 かつ DLL 済み」でだけ意味を持つ
     dimEl (document.getElementById ("sel-elastiqueMode"),
            isReaper && ! reaperAvailable && elastiqueLoaded);
+    // フォールバック先はキャッシュ経路（REAPER Shifter かつ Natural / Manual）でだけ意味を持つ
+    dimEl (document.getElementById ("sel-cacheFallback"), isReaper && dur !== 1);
+    const fbName = document.getElementById ("key-legend-fb");
+    if (fbName && C.cacheFallback) {
+      const names = C.cacheFallback.properties.choices || [];
+      fbName.textContent = names[C.cacheFallback.getChoiceIndex()] || "Varispeed";
+    }
 
     // REAPER Shifter は Sync 非対応 → Duration の "Sync" を選べなくする。選択中なら Natural へ。
     const selDur = document.getElementById ("sel-durationMode");
@@ -899,6 +906,37 @@ import ("./juce-index.js").then ((juce) => {
     const root = S.rootKey ? Math.round (S.rootKey.getScaledValue()) : -1;
     for (const [n, el] of keyEls) el.classList.toggle ("root", n === root);
   }
+
+  // バックエンドからの鍵盤状態（"keys" イベント、20Hz）。文字コードの意味は WebEditor.cpp 参照。
+  const keyFlashTimers = new Map();   // note -> timeout id（短いノート / miss の消灯用）
+  const flashClass = (n, cls, ms) => {
+    const el = keyEls.get (n); if (! el) return;
+    el.classList.add (cls);
+    const key = n + cls;
+    clearTimeout (keyFlashTimers.get (key));
+    keyFlashTimers.set (key, setTimeout (() => { el.classList.remove (cls); keyFlashTimers.delete (key); }, ms));
+  };
+  let fbCount = 0;   // 表示範囲内でフォールバックになる鍵の数（凡例の出し分け用）
+  window.__JUCE__.backend.addEventListener ("keys", (k) => {
+    if (! k || typeof k.state !== "string") return;
+    fbCount = 0;
+    for (const [n, el] of keyEls) {
+      const st = k.state.charCodeAt (n) - 48;
+      el.classList.toggle ("fb",   st === 2);
+      el.classList.toggle ("pend", st === 1);
+      if (st === 2) ++fbCount;
+      const h = k.held ? k.held.charCodeAt (n) - 48 : 0;
+      if (h === 1) {   // 押されている間は点灯し続ける（進行中の消灯タイマーは捨てる）
+        el.classList.add ("midi");
+        clearTimeout (keyFlashTimers.get (n + "midi")); keyFlashTimers.delete (n + "midi");
+      }
+      else if (h === 2) flashClass (n, "midi", 120);                       // 短いノート: 1 フレームは見せる
+      else if (! keyFlashTimers.has (n + "midi")) el.classList.remove ("midi");
+      if (k.miss && k.miss.charCodeAt (n) === 49) flashClass (n, "miss", 700);
+    }
+    const legend = document.getElementById ("key-legend");
+    if (legend) legend.hidden = fbCount === 0;
+  });
 
   let heldNote = -1;
   const noteOn  = (n) => { if (heldNote === n) return; noteOff(); heldNote = n; nfNote (n, true);
