@@ -333,13 +333,29 @@ std::shared_ptr<SampleBuffer> PitchCache::renderShift (int semi, int& usedGen)
     for (int ch = 0; ch < numCh; ++ch)
         for (float v : out[(std::size_t) ch]) peak = std::max (peak, std::abs (v));
 
-    const float onsetThr = std::max (0.0005f, peak * 0.02f);
     std::int64_t onset = 0;
-    for (std::int64_t i = 0, lim = std::min (avail, maxLead); i < lim; ++i)
+    if (useDirect)
     {
-        float mx = 0.0f;
-        for (int ch = 0; ch < numCh; ++ch) mx = std::max (mx, std::abs (out[(std::size_t) ch][(std::size_t) i]));
-        if (mx > onsetThr) { onset = i; break; }
+        // **élastique 直読みは実測の固有遅延で揃える。**
+        // 振幅の閾値で「音の頭」を探すと、素材が最初から大きいときに実レイテンシより
+        // 手前で反応し、その差のぶん中身が前倒しになって末尾が欠ける。
+        // 実測: 原音の末尾に置いた 100ms の無音がキャッシュでは 61ms しか残らず、
+        // 39ms ぶん失われていた。波形の途中で終わるので発音のたびにプチッと鳴る。
+        onset = std::clamp<std::int64_t> (
+                    elastique->latencySamples (numCh, sr,
+                        elaMode == 1 ? ElastiqueDirect::Soloist : ElastiqueDirect::Pro),
+                    0, std::max<std::int64_t> (0, avail - 1));
+    }
+    else
+    {
+        // REAPER 経路は遅延を問い合わせる手段が無いので従来どおり閾値で探す。
+        const float onsetThr = std::max (0.0005f, peak * 0.02f);
+        for (std::int64_t i = 0, lim = std::min (avail, maxLead); i < lim; ++i)
+        {
+            float mx = 0.0f;
+            for (int ch = 0; ch < numCh; ++ch) mx = std::max (mx, std::abs (out[(std::size_t) ch][(std::size_t) i]));
+            if (mx > onsetThr) { onset = i; break; }
+        }
     }
     const std::int64_t len = std::max<std::int64_t> (0, std::min (expectedLen, avail - onset));
 
@@ -360,6 +376,31 @@ std::shared_ptr<SampleBuffer> PitchCache::renderShift (int semi, int& usedGen)
     for (int ch = 0; ch < numCh; ++ch)
         for (std::int64_t i = 0; i < len; ++i)
             sb->data[(std::size_t) ch][(std::size_t) i] = makeup * out[(std::size_t) ch][(std::size_t) (onset + i)];
+
+    // **先頭をゼロから始める。**
+    // 上のオンセット検出は「ピークの2%を超えた最初のサンプル」で切るので、
+    // 出来上がったバッファは構造上かならず振幅 2%(-34dB) から始まる。
+    // これを無音の直後に鳴らすと段差になり、発音のたびにプチッと入る（実測: 先頭値が
+    // ピーク比 2.1%）。オンセットの位置は音の頭を保つために動かしたくないので、
+    // ごく短いフェードインで段差だけを消す。
+    //
+    // ゼロ交差へ吸着させる手もあるが、チャンネルごとに交差位置が違うので
+    // ステレオだと片側に段差が残る。フェードなら全チャンネルで確実にゼロから始まる。
+    // 長さは 1ms。アタックの立ち上がりに対しては十分短く、段差を消すには十分長い。
+    {
+        const std::int64_t fade = std::min<std::int64_t> (len, (std::int64_t) (sr * 0.001));
+        for (int ch = 0; ch < numCh; ++ch)
+            for (std::int64_t i = 0; i < fade; ++i)
+                sb->data[(std::size_t) ch][(std::size_t) i] *= (float) i / (float) fade;
+
+        // 終端も同じ理由でゼロに落とす。切り出し位置が波形の途中に来ると、
+        // そこから無音へ落ちて発音の終わりにプチッと入る（実測: 原音が 0 で終わる素材でも
+        // キャッシュはピーク比 80% で終わっていた）。
+        for (int ch = 0; ch < numCh; ++ch)
+            for (std::int64_t i = 0; i < fade; ++i)
+                sb->data[(std::size_t) ch][(std::size_t) (len - 1 - i)] *= (float) i / (float) fade;
+    }
+
     sb->numSamples = len;
     return sb;
 }
