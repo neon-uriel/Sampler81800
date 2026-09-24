@@ -279,14 +279,17 @@ private:
     juce::AudioFormatManager formatManager;
     // キャッシュのオフラインレンダを並列化するため複数スレッド。各半音は原子的に取り出すので競合しない。
     const int        cacheThreads = juce::jlimit (1, 6, (int) juce::SystemStats::getNumCpus() - 2);
-    // **背景レンダリングは必ずオーディオより低い優先度で走らせる。**
-    // JUCE の既定は normal で、それだとキャッシュ生成の重い FFT がオーディオスレッドと
-    // 同じ優先度で最大 cacheThreads 本走り、ホストのバッファが間に合わずプチプチする。
-    // 生成は止まっている間に貯めるものなので遅くて構わない。
+    // 背景レンダリングはオーディオより低い優先度で走らせる。ただし **background にはしない。**
+    // JUCE の Windows 実装では
+    //     Priority::low        → THREAD_PRIORITY_LOWEST
+    //     Priority::background → THREAD_PRIORITY_IDLE
+    // で、IDLE は「他に何も動いていないときだけ回る」優先度。DAW が動いている間は
+    // ほとんど進まず、キャッシュ生成が終わらなくなる（Issue #5）。
+    // オーディオスレッドより下であれば目的は足りるので lowest で十分。
     juce::ThreadPool loadPool { juce::ThreadPool::Options{}
                                     .withNumberOfThreads (cacheThreads)
                                     .withThreadName ("OtoMadSampler cache")
-                                    .withDesiredThreadPriority (juce::Thread::Priority::background) };
+                                    .withDesiredThreadPriority (juce::Thread::Priority::low) };
 
     otomad::VoiceManager voices;
     otomad::host::ReaperApi reaperApi;
