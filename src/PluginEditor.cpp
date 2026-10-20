@@ -81,13 +81,6 @@ OtoMadSamplerEditor::OtoMadSamplerEditor (OtoMadSamplerProcessor& p)
     cPMode  = &addCombo (P::portaMode,     "Porta",  { "Off", "Legato", "Always" });
     cAlgo   = &addCombo (P::algorithm,     "Algo",
                          { "Varispeed", "WSOLA", "Phase Vocoder", "Granular", "Stretch Library", "REAPER Shifter" });
-    // Granular / Stretch Library はプラグイン上だと無音になる問題があるため出さない。
-    // ネイティブ版は ComboBoxAttachment が「項目ID = 選択肢の並び順」を前提にしているので、
-    // Web UI のように項目ごと消すとパラメータとの対応が壊れる。ここは選べなくするに留める。
-    // （出荷しているのは Web UI 側。こちらは比較用ビルド OTOMAD_WEB_UI=0 でのみ使う）
-    for (int idx : { 3, 4 })
-        cAlgo->box.setItemEnabled (idx + 1, false);
-
     cDur    = &addCombo (P::durationMode,  "Duration", { "Natural", "Sync", "Manual" });
     cSync   = &addCombo (P::syncLength,    "Sync",   { "1/4", "1/2", "1", "2", "4" });
 

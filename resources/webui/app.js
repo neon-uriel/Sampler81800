@@ -213,9 +213,9 @@ import ("./juce-index.js").then ((juce) => {
 
   //================================================================ combo / toggle
   // UI から隠す選択肢（値は C++ 側にそのまま残っている）。
-  // Granular / Stretch Library はプラグイン上だと無音になる問題があるため外している。
-  // 直ったらこの配列から抜くだけでよい。エンジン本体とテストは残してある。
-  const HIDDEN_CHOICES = { algorithm: [3, 4] };
+  // 隠したい選択肢が出たら { パラメータID: [index, ...] } を足す。
+  // いまは無し（Granular / Stretch Library の無音問題が直ったので戻した）。
+  const HIDDEN_CHOICES = {};
 
   for (const id of ["algorithm", "durationMode", "syncLength", "portaMode",
                     "polyMode", "portaShape", "interpQuality", "elastiqueMode", "cacheFallback"]) {

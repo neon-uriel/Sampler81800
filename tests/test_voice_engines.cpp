@@ -108,17 +108,11 @@ TEST_CASE ("reported latency matches the engine actually used", "[voice][engines
 
     // Varispeed は生演奏用なのでレイテンシ0、長さ保持系は0より大きい
     REQUIRE (v.getReportedLatency (0) == 0);
-    for (int algo : { 1, 2 })
+    for (int algo : { 1, 2, 3, 4 })
     {
         INFO ("algorithm " << algo << " (" << algoName (algo) << ")");
         REQUIRE (v.getReportedLatency (algo) > 0);
     }
-
-    // Granular / StretchLib は無効化中（engineForAlgorithm が nullptr を返す）。
-    // 選択肢は state 互換のため残っているので、選ばれたら PV へフォールバックする。
-    // 有効化し直したらこの2行を消して上のループに戻すこと。
-    REQUIRE (v.getReportedLatency (3) == v.getReportedLatency (2));
-    REQUIRE (v.getReportedLatency (4) == v.getReportedLatency (2));
 }
 
 TEST_CASE ("switching algorithms mid-note does not crash", "[voice][engines]")
@@ -246,5 +240,68 @@ TEST_CASE ("alignLatency delays a zero-latency voice by exactly that many sample
         INFO ("sample " << i);
         REQUIRE (std::abs (delayed[i + (std::size_t) align] - plain[i]) < 1.0e-6f);
         REQUIRE (std::abs (delayed1[i + (std::size_t) align] - plain[i]) < 1.0e-6f);
+    }
+}
+
+TEST_CASE ("every algorithm still sounds on the 2nd and 3rd note", "[voice][engines]")
+{
+    // **1音目だけ鳴って2音目から無音になる**ことがある。startNote がエンジンを
+    // 個別に reset していて、新しく足したエンジンが列に入っていないと、
+    // 内部状態（needInit や読み出し位置）が前の音のまま残る。
+    // 前の音は素材を読み切って終わっているので、2音目は素材の外から読み始めて
+    // すぐ isFinished になり、何も出ない。
+    //
+    // 1音目しか見ないテストでは絶対に捕まらないので、同じ Voice で続けて鳴らす。
+    EngineResources res;
+    res.prepare (SR);
+    auto src = test::makeSine (440.0, SR, 0.5);
+
+    for (int algo = 0; algo < kNumAlgorithms; ++algo)
+    {
+        Voice v;
+        v.prepare (SR, BLOCK, 1, res, nullptr);
+
+        Voice::Params p;
+        p.rootKey = 60;
+        p.gainLin = 1.0f;
+        v.setParams (p);
+        v.setAdsr (0.001f, 0.010f, 1.0f, 0.010f);
+
+        Voice::EngineControl ec;
+        ec.algorithm    = algo;
+        ec.durationMode = 0;   // Natural
+        v.setEngineControl (ec);
+
+        for (int take = 1; take <= 3; ++take)
+        {
+            INFO ("algorithm " << algo << " (" << algoName (algo) << ") の " << take << " 音目");
+
+            v.noteOn (&src, 67, 0.9f, 0.0f, 1.0f, false, false, 67.0f);
+
+            // StretchLib はレイテンシが大きい（120ms前後）ので長めに回す
+            const int outLen = (int) (SR * 0.8);
+            std::vector<float> out ((std::size_t) outLen, 0.0f);
+            for (int pos = 0; pos < outLen; pos += BLOCK)
+            {
+                const int nn = std::min (BLOCK, outLen - pos);
+                float* ptr = out.data() + pos;
+                float* ptrs[1] = { ptr };
+                v.render (ptrs, 1, nn);
+            }
+
+            double peak = 0.0;
+            for (float s : out) peak = std::max (peak, (double) std::abs (s));
+            REQUIRE (peak > 0.01);   // 2音目以降も鳴ること（規約15）
+
+            v.noteOff();
+            // 次の音の前にテールを流し切る
+            std::vector<float> drain ((std::size_t) BLOCK, 0.0f);
+            for (int k = 0; k < 40; ++k)
+            {
+                float* ptr = drain.data(); float* ptrs[1] = { ptr };
+                std::fill (drain.begin(), drain.end(), 0.0f);
+                v.render (ptrs, 1, BLOCK);
+            }
+        }
     }
 }

@@ -73,8 +73,8 @@ IPitchEngine* Voice::engineForAlgorithm (int algorithm) noexcept
         // リストから抜くと REAPER Shifter が index 5→3 にずれ、既存プロジェクトの
         // アルゴリズム選択が別物に化ける（規約12: 選択肢は縮小しない）。
         // 原因が分かったらここを元に戻すだけでよい。エンジン本体とテストは残してある。
-        case 3: return nullptr;   // Granular（無効化中）
-        case 4: return nullptr;   // Stretch Library（無効化中）
+        case 3: return &granular;
+        case 4: return &stretchLib;
         case 5: return reaper.isAvailable() ? &reaper : nullptr;   // REAPER上でのみ実動作
         default: return nullptr;
     }
@@ -149,10 +149,12 @@ void Voice::startNote (const Pending& p) noexcept
     drainCounter = 0;
 
 
-    varispeed.reset();
-    wsola.reset();
-    phaseVocoder.reset();
-    reaper.reset();
+    // **ここでエンジンを手書きで並べない。** 足したエンジンを入れ忘れると、
+    // そのエンジンだけ内部状態（needInit・読み出し位置・OLA/FIFO）が前の音のまま残り、
+    // 2音目は素材の外から読み始めてすぐ終端判定になって無音になる。
+    // Granular / Stretch Library が実際にこれで「1音目だけ鳴る」状態だった。
+    // lifecycle（prepare/reset）は allEngines を回す、と Voice.h に書いてあるとおりにする。
+    for (auto* e : allEngines) e->reset();
 
     if (p.glide) porta.startGlide (p.originNote, (float) p.note);
     else         porta.startAt ((float) p.note);
