@@ -26,8 +26,10 @@ add_executable(otomad_tests
     test_vibrato.cpp
     test_pitchflatten.cpp
     test_pitchcache.cpp
+    test_retrigger.cpp
     ${CMAKE_SOURCE_DIR}/src/core/SourceReader.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Voice.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/VoiceManager.cpp
     ${CMAKE_SOURCE_DIR}/src/pitch/ReaperPitchShiftEngine.cpp
     ${CMAKE_SOURCE_DIR}/src/host/ReaperApi.cpp
     ${CMAKE_SOURCE_DIR}/src/core/PortamentoGenerator.cpp

@@ -122,11 +122,15 @@ void VoiceManager::noteOn (int note, float vel, const SampleBuffer* sample,
     const int slot = chooseVoiceSlot (states, note);
     Voice& v = voices[(std::size_t) slot];
 
-    const bool steal = v.isActive() && v.getNote() != note;
-    if (steal)
-        v.requestSteal (sample, note, vel, s01, e01, snap, false, (float) note, opts);
-    else
-        v.noteOn (sample, note, vel, s01, e01, snap, false, (float) note, opts);
+    // **鳴っている voice は音程が同じでも必ずフェードしてから切り替える。**
+    // 以前は `v.isActive() && v.getNote() != note` を条件にしていたので、同じ音程の
+    // 連打（1/64 刻みなど）だと素通りして noteOn が直接呼ばれ、鳴っている波形の途中から
+    // 新しい音の先頭へ無フェードで飛んで段差になっていた。
+    // 実測（140BPM の 1/64 を 32回, Varispeed, Poly 8）: 原音の最大隣接差分の 17.7 倍の
+    // 段差が 31 箇所＝ほぼ 1 音に 1 回。Mono 側は元から無条件に requestSteal していて
+    // 同じ条件で 0 箇所だった。
+    // requestSteal は voice が鳴っていなければそのまま即発音するので、分岐は要らない。
+    v.requestSteal (sample, note, vel, s01, e01, snap, false, (float) note, opts);
 
     voiceOnTime[(std::size_t) slot] = now;
 
